@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0"> <!-- スマホ対応 -->
+<title>予約ページ</title>
+<style>
+  body { font-family: sans-serif; padding: 18px; font-size: 18px; line-height: 1.4; }
+  h1 { font-size: 22px; margin-bottom: 12px; }
+  label, input, button { font-size: 18px; }
+  #count { font-size: 36px; margin: 12px 0; word-break: keep-all; } /* 改行しにくくする */
+  input[type="number"] { width: 80px; padding: 6px; }
+  button { padding: 8px 14px; margin-left:8px; }
+  #result { margin-top: 14px; font-size: 18px; }
+</style>
+</head>
+<body>
+  <h1>じゃがバター 予約</h1>
+
+  <div id="count">現在の待ち人数: 読み込み中...</div>
+
+  <label>人数（1〜3人）：
+    <input id="people" type="number" min="1" max="3" value="1" />
+  </label>
+  <button id="reserveBtn" onclick="reserve()">予約する</button>
+
+  <div id="result">予約情報：なし</div>
+
+<script>
+const GAS_URL = "https://https://script.google.com/macros/s/AKfycbw2epBS433GkurirJigN6O-wIdpF1AF9_gxleJI05UAHe-Zbp535qqEOnCvStYtANMZ/exec"; // 
+const REFRESH_INTERVAL = 5000; // 待ち人数表示は5秒ごと更新（管理画面は9秒）
+
+// ローカル保存キー
+const STORAGE_KEY = "my_reservation_info";
+
+// ページ読み込み時：サーバから集計を取って表示、ローカル情報があれば復元
+window.addEventListener("load", () => {
+  refreshStatus();
+  restoreLocal();
+  setInterval(refreshStatus, 5000);
+});
+
+async function refreshStatus() {
+  try {
+    const res = await fetch(GAS_URL);
+    const data = await res.json();
+    document.getElementById("count").innerText = `現在の待ち人数: ${data.totalWaiting} 人（目安: ${Math.ceil((data.totalWaiting/19)*15 + (data.offsetMinutes||0))}分）`;
+    // ローカルに予約があれば、サーバ側で状態が変わっていないか確認して消す処理を行う
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+    if (saved && saved.number) {
+      // find reservation by number from server list
+      const mine = data.list.find(item => Number(item.number) === Number(saved.number));
+      if (!mine || mine.state === "キャンセル" || mine.state === "受け取り済み") {
+        // 管理側で消された（キャンセル or completed）ならローカルをクリアしてUIを更新
+        localStorage.removeItem(STORAGE_KEY);
+        showNoReservation();
+        alert("あなたの予約はキャンセルまたは受け取り済みになりました。");
+      } else {
+        // まだ有効 => 更新表示（待ち時間も表示）
+        const wait = mine.waitMinutes;
+        document.getElementById("result").innerHTML = `受付番号: <b>${mine.number}</b> ／ 人数: ${mine.people}人 ／ 状態: ${mine.state} ／ 推定待ち時間: ${wait}分<br><button onclick="cancel(${mine.number})">キャンセルする</button>`;
+        document.getElementById("reserveBtn").style.display = "none";
+        document.getElementById("people").value = mine.people;
+        document.getElementById("people").disabled = true;
+      }
+    }
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function restoreLocal() {
+  const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+  if (saved && saved.number) {
+    // 一旦表示はサーバ確認で上書きされるが、即座に見せたい場合
+    document.getElementById("result").innerText = `受付番号: ${saved.number} ／ 人数: ${saved.people}人`;
+    document.getElementById("reserveBtn").style.display = "none";
+    document.getElementById("people").disabled = true;
+  }
+}
+
+function showNoReservation() {
+  document.getElementById("result").innerText = "予約情報：なし";
+  document.getElementById("reserveBtn").style.display = "inline-block";
+  document.getElementById("people").disabled = false;
+}
+
+async function reserve() {
+  const people = Number(document.getElementById("people").value);
+  if (!people || people < 1 || people > 3) {
+    alert("予約人数は1〜3人で入力してください。");
+    return;
+  }
+  try {
+    const res = await fetch(GAS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "reserve", people: people })
+    });
+    const data = await res.json();
+    if (data.error) {
+      alert(data.error);
+      return;
+    }
+    // 成功
+    const info = { number: data.number, people: people };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(info));
+    document.getElementById("result").innerText = `受付番号: ${data.number} ／ 人数: ${people}人 ／ 状態: 待ち`;
+    document.getElementById("reserveBtn").style.display = "none";
+    document.getElementById("people").disabled = true;
+    // すぐ最新の待ち時間を取りに行く
+    refreshStatus();
+  } catch (e) {
+    console.error(e);
+    alert("予約に失敗しました。通信環境を確認してください。");
+  }
+}
+
+async function cancel(number) {
+  if (!confirm("本当にキャンセルしますか？")) return;
+  try {
+    await fetch(GAS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "cancel", number: number })
+    });
+    // ローカル削除・表示リセット
+    localStorage.removeItem(STORAGE_KEY);
+    showNoReservation();
+    refreshStatus();
+    alert("キャンセルしました。");
+  } catch (e) {
+    console.error(e);
+    alert("キャンセルに失敗しました。");
+  }
+}
+</script>
+</body>
+</html>
